@@ -3,29 +3,23 @@ A simple multi-threaded TCP port scanner written in python.
 
 UDP support may or may not be comming in the future. This program was
 written just for fun. If you want a good port scanner use
-nmap <https://nmap.org/>.
+nmap: <https://nmap.org/>.
 
 The code is released under the GPLv3 (see LICENSE).
 
 ## Examples
-
 ```bash
 $ ./pyscan -p 1-5,8080 localhost www.nmap.org
 ```
 will scan ports 1, 2, 3, 4, 5 and 8080 on localhost and www.nmap.org.
-
 ```bash
 $ ./pyscan -p '*' localhost
 ```
 will scan all ports on localhost.
-
-Adjusting the number of used threads:
 ```bash
 $ ./pyscan -T 20 -p '*' localhost
 ```
 will scan all ports on localhost using 20 threads.
-
-Changing the connect timeout:
 ```bash
 $ ./pyscan -t 20 localhost
 ```
@@ -48,7 +42,7 @@ PORT      STATE    SERVICE
 pyscan executes a full connect() on the target port, so this is no
 SYN-scanning like it can be used by nmap. This makes pyscan much
 slower, since the full TCP 3-way-handshake is run. Even worse: By
-now the implementation even run close() on the open ports, which
+now the implementation even runs close() on the open ports, which
 causes additional traffic.
 
 ## Installation
