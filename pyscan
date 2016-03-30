@@ -1,0 +1,200 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""A simple multi-threaded TCP port scanner written in python.
+
+UDP support may or may not be comming in the future. This program was
+written just for fun. If you want a good port scanner use
+nmap <https://nmap.org/>.
+"""
+
+# standard imports
+import argparse
+import itertools
+import socket
+import sys
+import threading
+import time
+
+if sys.version_info.major > 2:
+    import queue
+else:
+    import Queue as queue
+
+# local imports
+import stopthread
+
+# constants
+DEFAULT_TIMEOUT = 0.25
+DEFAULT_THREAD_COUNT = 5
+DEFAULT_PORTS = '1-1024'
+
+PROTOCOLS = {
+    'tcp' : socket.SOCK_STREAM,
+    'udp' : socket.SOCK_DGRAM
+}
+
+def create_port_list(port_string):
+    """Returns a list of ports from a string.
+    
+    Ports listed multiple times, will be multiple
+    times in the returned list.
+    
+    If port_string is '*' return all possible ports (from 1 to 2**16-1).
+    
+    >>> create_port_list('1-7,50,56-58')
+    [1, 2, 3, 4, 5, 6, 7, 50, 56, 57, 58]
+    """
+    
+    if port_string == '*':
+        return [p for p in range(1, 2**16)]
+    
+    plist = []
+    slist = port_string.split(',')
+    for s in slist:
+        if '-' in s:
+            start, end = s.split('-')
+            plist.extend([p for p in range(int(start), int(end)+1)])
+        else:
+            plist.append(int(s))
+            
+    plist.sort()
+    return plist
+
+def scan_ports(jobs, states, timeout):
+    """Run connect scans on the host/port tuples in the job queue."""
+    
+    try:
+        item = jobs.get(block=False)
+    except queue.Empty:
+        raise stopthread.Stop
+
+    # This code is compatible with python 2 and 3.
+    # Keep it this way!
+    protocol, port, host = item
+    ptype = PROTOCOLS.get(protocol)
+
+    try:
+        sok = socket.socket(socket.AF_INET, ptype)
+        sok.settimeout(timeout)
+        sok.connect((host, port))
+        sok.close()
+        states.append((host, port, protocol, 'open'))
+    except socket.timeout:
+        states.append((host, port, protocol, 'filtered'))
+    except socket.error:
+        states.append((host, port, protocol, 'closed'))
+    finally:
+        del sok
+
+    jobs.task_done()
+
+def print_states(states):
+    # sort states by host, port, protocol
+    states.sort()
+    
+    lasthost = None
+    
+    for (host, port, protocol, state) in states:
+        if host != lasthost:
+            print("Scan report for %s:" % host)
+            print("PORT      STATE    SERVICE")
+            # e.g. 20012/tcp filtered voicebox
+            lasthost = host
+        
+        if state == "open":
+            try:
+                service = socket.getservbyport(port, protocol)
+            except socket.error:
+                service = "unknown"
+            s = "%d/%s" % (port, protocol)
+            s = s.ljust(10)
+            s += "%s" % state
+            s = s.ljust(19)
+            s += service
+            print(s)
+
+def stop_threads(threads):
+    for t in threads:
+        t.stop()
+        # Also joining the threads is cleaner, since there could still
+        # be work to be done (e.g. closing a socket).
+        t.join() 
+
+if __name__ == '__main__':
+    # import doctest
+    # doctest.testmod()
+    
+    # parse commandline arguments
+    parser = argparse.ArgumentParser(
+        description='Run a TCP-connect scan on host(s).')
+    parser.add_argument(
+        'host', nargs='+', help="The host(s) you want to scan.")
+    parser.add_argument(
+        '-p', '--ports',
+        default=DEFAULT_PORTS,
+        help="""The port range e.g. 1-4,20 or '*'
+        for all ports (defaults to %s).""" % DEFAULT_PORTS)
+    parser.add_argument(
+        '-t', '--timeout', type=float,
+        default=DEFAULT_TIMEOUT,
+        help="""The timeout to wait for an answer
+        from the host for the scan of one port in seconds
+        (defaults to %s).""" % DEFAULT_TIMEOUT)
+    parser.add_argument(
+        '-T', '--threads', type=int,
+        default=DEFAULT_THREAD_COUNT,
+        help="""The number of threads to use for
+        scanning (defaults to %d).""" % DEFAULT_THREAD_COUNT)
+    
+    args = parser.parse_args()
+    try:
+        args.ports = create_port_list(args.ports)
+    except:
+        sys.stderr.write(
+            "pyscan: error: argument -p/--ports: invalid value '%s'\n" % args.ports
+            )
+        sys.exit(1)
+
+    # fill the job queue
+    jobs = queue.Queue()    # create the job queue
+    states = []             # list.append is thread-safe.
+    
+    # protocols = ['tcp', 'udp']
+    # right now, we only support tcp-scanning
+    protocols = ['tcp']
+    
+    for job in itertools.product(protocols, args.ports, args.host):
+        jobs.put(job)
+    
+    # start the workers
+    # this code is derived from the queue module docs of python 3
+    threads = []
+    for i in range(args.threads):
+        t = stopthread.StopThread(
+            atom_target=scan_ports, args=(jobs, states, args.timeout))
+        t.start()
+        threads.append(t)
+    
+    try:
+        # wait until all jobs are done (checking every 100ms)
+        # we don't use jobs.join() in order to be able to handle
+        # exceptions
+        while True:
+            time.sleep(0.1)
+            if jobs.empty():
+                break
+                
+        # stop/join workers
+        stop_threads(threads)
+        
+        # finally print the host states
+        print_states(states)
+        
+    except KeyboardInterrupt:
+        stop_threads(threads)
+        print("Aborted by user")
+        sys.exit(1)
+    except:
+        stop_threads(threads)
+        raise
