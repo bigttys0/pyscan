@@ -3,7 +3,7 @@
 import threading
 
 class Stop(Exception):
-    """Exception that signals to a StopThread, that is should stop."""
+    """Exception that signals to a StopThread, that it should stop."""
     pass
 
 class StopThread(threading.Thread):
